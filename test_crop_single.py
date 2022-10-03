@@ -58,15 +58,15 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', type=str, default='tcga', help='Dataset name [tcga]')
     args = parser.parse_args()
     if args.dataset == 'tcga':
-        path_base = ('test/input')
-        out_base = ('test/patches')
-        folder = 'test'
-        makedirs('test/thumbnails', exist_ok=True)
+        path_base = ('/remote-home/share/promptMIL/test/input')
+        out_base = ('/remote-home/share/promptMIL/test/patches')
+        folder = '/remote-home/share/promptMIL/test'
+        makedirs('/remote-home/share/promptMIL/test/thumbnails', exist_ok=True)
     elif args.dataset == 'c16':
-        path_base = ('test-c16/input')
-        out_base = ('test-c16/patches')
-        folder = ('test-c16')
-        makedirs('test-c16/thumbnails', exist_ok=True)
+        path_base = ('/remote-home/share/promptMIL/test-c16/input')
+        out_base = ('/remote-home/share/promptMIL/test-c16/patches')
+        folder = ('/remote-home/share/promptMIL/test-c16')
+        makedirs('/remote-home/share/promptMIL/test-c16/thumbnails', exist_ok=True)
     all_slides = glob.glob(join(path_base, '*.svs')) + glob.glob(join(path_base, '*.tif'))
     parser.add_argument('--overlap', type=int, default=0)
     parser.add_argument('--patch_size', type=int, default=224)

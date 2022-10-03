@@ -117,7 +117,7 @@ if __name__ == '__main__':
     i_classifier = mil.IClassifier(resnet, args.feats_size, output_class=args.num_classes).cuda()
     b_classifier = mil.BClassifier(input_size=args.feats_size, output_class=args.num_classes).cuda()
     milnet = mil.MILNet(i_classifier, b_classifier).cuda()
-    state_dict_weights = torch.load(os.path.join('test-c16', 'weights', 'embedder.pth'))
+    state_dict_weights = torch.load(os.path.join('/remote-home/share/promptMIL/test-c16', 'weights', 'embedder.pth'))
     new_state_dict = OrderedDict()
     for i in range(4):
         state_dict_weights.popitem()
@@ -126,11 +126,11 @@ if __name__ == '__main__':
         name = k_0
         new_state_dict[name] = v
     i_classifier.load_state_dict(new_state_dict, strict=False)
-    state_dict_weights = torch.load(os.path.join('test-c16', 'weights', 'aggregator.pth'))
+    state_dict_weights = torch.load(os.path.join('/remote-home/share/promptMIL/test-c16', 'weights', 'aggregator.pth'))
     state_dict_weights["i_classifier.fc.weight"] = state_dict_weights["i_classifier.fc.0.weight"]
     state_dict_weights["i_classifier.fc.bias"] = state_dict_weights["i_classifier.fc.0.bias"]
     milnet.load_state_dict(state_dict_weights, strict=False)
     
-    bags_list = glob.glob(os.path.join('test-c16', 'patches', '*'))
-    os.makedirs(os.path.join('test-c16', 'output'), exist_ok=True)
+    bags_list = glob.glob(os.path.join('/remote-home/share/promptMIL/test-c16', 'patches', '*'))
+    os.makedirs(os.path.join('/remote-home/share/promptMIL/test-c16', 'output'), exist_ok=True)
     test(args, bags_list, milnet)

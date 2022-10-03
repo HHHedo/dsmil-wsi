@@ -83,8 +83,8 @@ def test(args, bags_list, milnet):
             bag_prediction, A, _ = milnet.b_classifier(bag_feats, ins_classes)
             bag_prediction = torch.sigmoid(bag_prediction).squeeze().cpu().numpy()
             if args.average:
-                max_prediction, _ = torch.max(ins_classes, 0) 
-                bag_prediction = (bag_prediction+max_prediction)/2
+                max_prediction, _ = torch.max(ins_classes, 0)
+                bag_prediction = (bag_prediction+max_prediction.cpu().numpy())/2
             color = [0, 0, 0]
             if bag_prediction[0] >= args.thres_luad and bag_prediction[1] < args.thres_lusc:
                 print(bags_list[i] + ' is detected as: LUAD')
@@ -106,7 +106,7 @@ def test(args, bags_list, milnet):
                 color_map[pos[0], pos[1]] = tile_color
             slide_name = bags_list[i].split(os.sep)[-1]
             color_map = transform.resize(color_map, (color_map.shape[0]*32, color_map.shape[1]*32), order=0)
-            io.imsave(os.path.join('test', 'output', slide_name+'.png'), img_as_ubyte(color_map))        
+            io.imsave(os.path.join('/remote-home/share/promptMIL/test', 'output', slide_name+'.png'), img_as_ubyte(color_map))        
             
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Testing workflow includes attention computing and color map production')
@@ -127,7 +127,7 @@ if __name__ == '__main__':
     b_classifier = mil.BClassifier(input_size=args.feats_size, output_class=args.num_classes).cuda()
     milnet = mil.MILNet(i_classifier, b_classifier).cuda()
     
-    state_dict_weights = torch.load(os.path.join('test', 'weights', 'embedder.pth'))
+    state_dict_weights = torch.load(os.path.join('/remote-home/share/promptMIL/test', 'weights', 'embedder.pth'))
     new_state_dict = OrderedDict()
     for i in range(4):
         state_dict_weights.popitem()
@@ -136,11 +136,11 @@ if __name__ == '__main__':
         name = k_0
         new_state_dict[name] = v
     i_classifier.load_state_dict(new_state_dict, strict=False)
-    state_dict_weights = torch.load(os.path.join('test', 'weights', 'aggregator.pth'))
+    state_dict_weights = torch.load(os.path.join('/remote-home/share/promptMIL/test', 'weights', 'aggregator.pth'))
     state_dict_weights["i_classifier.fc.weight"] = state_dict_weights["i_classifier.fc.0.weight"]
     state_dict_weights["i_classifier.fc.bias"] = state_dict_weights["i_classifier.fc.0.bias"]
     milnet.load_state_dict(state_dict_weights, strict=False)
     
-    bags_list = glob.glob(os.path.join('test', 'patches', '*'))
-    os.makedirs(os.path.join('test', 'output'), exist_ok=True)
+    bags_list = glob.glob(os.path.join('/remote-home/share/promptMIL/test', 'patches', '*'))
+    os.makedirs(os.path.join('/remote-home/share/promptMIL/test', 'output'), exist_ok=True)
     test(args, bags_list, milnet)
