@@ -2,6 +2,14 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
+#vpt
+import math
+import numpy as np
+import torch
+import torch.nn as nn
+import torchvision as tv
+from functools import reduce
+from operator import mul
 
 class FCLayer(nn.Module):
     def __init__(self, in_size, out_size=1):
@@ -48,14 +56,19 @@ class BClassifier(nn.Module):
         device = feats.device
         V = self.v(feats) # N x V, unsorted
         Q = self.q(feats).view(feats.shape[0], -1) # N x Q, unsorted
-        # print(c.shape)
+        # print('Q', Q)
         # handle multiple classes without for loop
         _, m_indices = torch.sort(c, 0, descending=True) # sort class scores along the instance dimension, m_indices in shape N x C
         # print(m_indices.shape)
         m_feats = torch.index_select(feats, dim=0, index=m_indices[0, :]) # select critical instances, m_feats in shape C x K 
         q_max = self.q(m_feats) # compute queries of critical instances, q_max in shape C x Q
+        # print('k', q_max)
         A = torch.mm(Q, q_max.transpose(0, 1)) # compute inner product of Q to each entry of q_max, A in shape N x C, each column contains unnormalized attention scores
-        A = F.softmax( A / torch.sqrt(torch.tensor(Q.shape[1], dtype=torch.float32, device=device)), 0) # normalize attention scores, A in shape N x C, 
+        # print('not normalized A',A.shape, A)
+        # A = F.softmax( A / torch.sqrt(torch.tensor(Q.shape[1], dtype=torch.float32, device=device)), 0) # normalize attention scores, A in shape N x C, 
+        A = F.softmax( A, 0)
+        # print('normalized A', A)
+        # print(Q.shape[1])
         B = torch.mm(A.transpose(0, 1), V) # compute bag representation, B in shape C x V
                 
         B = B.view(1, B.shape[0], B.shape[1]) # 1 x C x V
@@ -64,14 +77,40 @@ class BClassifier(nn.Module):
         return C, A, B 
     
 class MILNet(nn.Module):
-    def __init__(self, i_classifier, b_classifier):
+    def __init__(self, i_classifier, b_classifier, prompt=False):
         super(MILNet, self).__init__()
         self.i_classifier = i_classifier
         self.b_classifier = b_classifier
-        
+        self.prompt = prompt
+        if prompt:
+            print(prompt)
+            print('*************prompting*************')
+            #TODO:drop out/proj
+            prompt_dim = 512
+            hidden_size = 512
+            num_tokens = 1000
+            # self.prompt_proj = nn.Linear(
+            #     prompt_dim, hidden_size)
+            # nn.init.kaiming_normal_(
+            #     self.prompt_proj.weight, a=0, mode='fan_out')
+            self.prompt_dropout = nn.Dropout(0.1)
+
+            # val = math.sqrt(6. / float(3 * reduce(mul, patch_size, 1) + prompt_dim))  # noqa
+            # self.prompt_embeddings = nn.Parameter(torch.zeros(
+            #     1, num_tokens, prompt_dim))
+            # # xavier_uniform initialization
+            # nn.init.uniform_(self.prompt_embeddings.data, -val, val)
+
+            self.prompt_embeddings = nn.Parameter(torch.randn([num_tokens, prompt_dim]))
     def forward(self, x):
+        # print(x.shape)
+        batch_size=x.shape[0]
+        if self.prompt:
+            x = torch.cat((x, 
+            self.prompt_dropout(self.prompt_embeddings))
+            ,dim=0)
         feats, classes = self.i_classifier(x)
-        # print( feats, classes)
+        # print(feats)
         prediction_bag, A, B = self.b_classifier(feats, classes)
         
         return classes, prediction_bag, A, B

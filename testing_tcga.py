@@ -96,6 +96,7 @@ def test(args, bags_list, milnet):
                 attentions = A[:, 1]
             elif bag_prediction[0] < args.thres_luad and bag_prediction[1] < args.thres_lusc:
                 print(bags_list[i] + ' is detected as: benign')
+                continue
             else:
                 print(bags_list[i] + ' is detected as: both LUAD and LUSC')
             color_map = np.zeros((np.amax(pos_arr, 0)[0]+1, np.amax(pos_arr, 0)[1]+1, 3))

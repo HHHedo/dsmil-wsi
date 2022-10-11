@@ -14,29 +14,38 @@ from sklearn.metrics import roc_curve, roc_auc_score, precision_recall_fscore_su
 from sklearn.datasets import load_svmlight_file
 from collections import OrderedDict
 from torch.utils.data import Dataset 
-
+import redis
+import pickle
+import time 
 class BagDataset(Dataset):
-    def __init__(self,train_path, args) -> None:
+    def __init__(self,train_path, args, database=None) -> None:
         super(BagDataset).__init__()
         self.train_path = train_path
         # self.csv_file_df = csv_file_df
         self.args = args
+        self.database = database
 
     def get_bag_feats(self,csv_file_df, args):
         if args.dataset == 'TCGA-lung-default':
             feats_csv_path = 'datasets/tcga-dataset/tcga_lung_data_feats/' + csv_file_df.iloc[0].split('/')[1] + '.csv'
         else:
             feats_csv_path = csv_file_df.iloc[0]
-        df = pd.read_csv(feats_csv_path)
-        feats = shuffle(df).reset_index(drop=True)
-        feats = feats.to_numpy()
-        label = np.zeros(args.num_classes)
-        if args.num_classes==1:
-            label[0] = csv_file_df.iloc[1]
+        if self.database is None:
+            df = pd.read_csv(feats_csv_path)
+            feats = shuffle(df).reset_index(drop=True)
+            feats = feats.to_numpy()
+            label = np.zeros(args.num_classes)
+            if args.num_classes==1:
+                label[0] = csv_file_df.iloc[1]
+            else:
+                if int(csv_file_df.iloc[1])<=(len(label)-1):
+                    label[int(csv_file_df.iloc[1])] = 1
+            label = torch.tensor(np.array(label))
+            feats = torch.tensor(np.array(feats)).float()
         else:
-            if int(csv_file_df.iloc[1])<=(len(label)-1):
-                label[int(csv_file_df.iloc[1])] = 1
-            
+            key = csv_file_df.iloc[0]
+            feats = pickle.loads(self.database.get(key+'feats'))
+            label = pickle.loads(self.database.get(key+'label'))
         return label, feats
 
     def dropout_patches(self,feats, p):
@@ -49,15 +58,16 @@ class BagDataset(Dataset):
     
     def __getitem__(self, idx):
         label, feats = self.get_bag_feats(self.train_path.iloc[idx], self.args)
-        feats = self.dropout_patches(feats, self.args.dropout_patch)
+        return  label, feats
+        # feats = self.dropout_patches(feats, self.args.dropout_patch)
         # print(label, feats)
-        bag_label = torch.tensor(np.array(label))
-        bag_feats = torch.tensor(np.array(feats)).float()
-        # print(bag_label, bag_feats)
-        # print('before', bag_feats.shape)
+        # bag_label = torch.tensor(np.array(label))
+        # bag_feats = torch.tensor(np.array(feats)).float()
+        # # print(bag_label, bag_feats)
+        # # print('before', bag_feats.shape)
         
-        # print('after',bag_label.shape,bag_feats.shape)
-        return bag_label, bag_feats
+        # # print('after',bag_label.shape,bag_feats.shape)
+        # return bag_label, bag_feats
         
     def __len__(self):
         return len(self.train_path)
@@ -115,11 +125,24 @@ def train(train_df, milnet, criterion, optimizer, args):
         # bag_feats = Variable(Tensor([feats])).cuda()
         # print('inner',bag_feats.shape)
         # bag_feats = bag_feats.view(-1, args.feats_size)
-        ins_prediction, bag_prediction, _, _ = milnet(bag_feats)
-        max_prediction, _ = torch.max(ins_prediction, 0)        
-        bag_loss = criterion(bag_prediction.view(1, -1), bag_label.view(1, -1))
-        max_loss = criterion(max_prediction.view(1, -1), bag_label.view(1, -1))
-        loss = 0.5*bag_loss + 0.5*max_loss
+        if args.model == 'dsmil':
+            ins_prediction, bag_prediction, attention, atten_B= milnet(bag_feats)
+            max_prediction, _ = torch.max(ins_prediction, 0)        
+            bag_loss = criterion(bag_prediction.view(1, -1), bag_label.view(1, -1))
+            max_loss = criterion(max_prediction.view(1, -1), bag_label.view(1, -1))
+            loss = 0.5*bag_loss + 0.5*max_loss
+
+        elif args.model == 'abmil':
+            bag_prediction, _, attention = milnet(bag_feats)
+            loss =  criterion(bag_prediction.view(1, -1), bag_label.view(1, -1))
+        if args.prompt:
+                # print(attention.shape)
+                print('\n patches attention max:{:.5f}, min:{:.5f}, mean:{:.5f}'.format(attention[:1000].max().item(), attention[:1000].min().item(), attention[:1000].mean().item()))
+                print('\n prompt attention max:{:.5f}, min:{:.5f}, mean:{:.5f}'.format(attention[1000:].max().item(), attention[1000:].min().item(), attention[1000:].mean().item()))
+        else:
+            # print(attention)
+            print('\n attention max:{:.5f}, min:{:.5f}, mean:{:.5f}'.format(attention.max().item(), attention.min().item(), attention.mean().item()))
+            
         loss.backward()
         optimizer.step()
         total_loss = total_loss + loss.item()
@@ -153,11 +176,16 @@ def test(test_df, milnet, criterion, optimizer, args):
             bag_label = bag_label.cuda()
             bag_feats = bag_feats.cuda()
             bag_feats = bag_feats.view(-1, args.feats_size)
-            ins_prediction, bag_prediction, _, _ = milnet(bag_feats)
-            max_prediction, _ = torch.max(ins_prediction, 0)  
-            bag_loss = criterion(bag_prediction.view(1, -1), bag_label.view(1, -1))
-            max_loss = criterion(max_prediction.view(1, -1), bag_label.view(1, -1))
-            loss = 0.5*bag_loss + 0.5*max_loss
+            if args.model == 'dsmil':
+                ins_prediction, bag_prediction, _, _ = milnet(bag_feats)
+                max_prediction, _ = torch.max(ins_prediction, 0)  
+                bag_loss = criterion(bag_prediction.view(1, -1), bag_label.view(1, -1))
+                max_loss = criterion(max_prediction.view(1, -1), bag_label.view(1, -1))
+                loss = 0.5*bag_loss + 0.5*max_loss
+            else:
+                bag_prediction, _, _ =  milnet(bag_feats)
+                max_prediction = bag_prediction
+                loss = criterion(bag_prediction.view(1, -1), bag_label.view(1, -1))
             total_loss = total_loss + loss.item()
             sys.stdout.write('\r Testing bag [%d/%d] bag loss: %.4f' % (i, len(test_df), loss.item()))
             test_labels.extend(label)
@@ -197,7 +225,7 @@ def multi_label_roc(labels, predictions, num_classes, pos_label=1):
     for c in range(0, num_classes):
         label = labels[:, c]
         prediction = predictions[:, c]
-        print(label, prediction,label.shape, prediction.shape, labels.shape, predictions.shape)
+        # print(label, prediction,label.shape, prediction.shape, labels.shape, predictions.shape)
         fpr, tpr, threshold = roc_curve(label, prediction, pos_label=1)
         fpr_optimal, tpr_optimal, threshold_optimal = optimal_thresh(fpr, tpr, threshold)
         c_auc = roc_auc_score(label, prediction)
@@ -226,27 +254,37 @@ def main():
     parser.add_argument('--dropout_node', default=0, type=float, help='Bag classifier dropout rate [0]')
     parser.add_argument('--non_linearity', default=1, type=float, help='Additional nonlinear operation [0]')
     parser.add_argument('--average', type=bool, default=True, help='Average the score of max-pooling and bag aggregating')
+    parser.add_argument('--prompt', action='store_true',help='Using prompt')
+    parser.add_argument('--database', action='store_true', help='Using database')
+    parser.add_argument('--test', action='store_true', help='Test only')
     args = parser.parse_args()
     # gpu_ids = tuple(args.gpu_index)
     # os.environ['CUDA_VISIBLE_DEVICES']=','.join(str(x) for x in gpu_ids)
     
     if args.model == 'dsmil':
         import dsmil as mil
+        i_classifier = mil.FCLayer(in_size=args.feats_size, out_size=args.num_classes).cuda()
+        b_classifier = mil.BClassifier(input_size=args.feats_size, output_class=args.num_classes, dropout_v=args.dropout_node, nonlinear=args.non_linearity).cuda()
+        milnet = mil.MILNet(i_classifier, b_classifier, args.prompt).cuda()
     elif args.model == 'abmil':
         import abmil as mil
-    
-    i_classifier = mil.FCLayer(in_size=args.feats_size, out_size=args.num_classes).cuda()
-    b_classifier = mil.BClassifier(input_size=args.feats_size, output_class=args.num_classes, dropout_v=args.dropout_node, nonlinear=args.non_linearity).cuda()
-    milnet = mil.MILNet(i_classifier, b_classifier).cuda()
-    # print(next(milnet.parameters()).device)
+        milnet = mil.Attention( out_size=args.num_classes).cuda()
+
     if args.model == 'dsmil':
         state_dict_weights = torch.load('init.pth')
+        # print(state_dict_weights)
         try:
             milnet.load_state_dict(state_dict_weights, strict=False)
+            print("***********loading init*******************")
+            # print(state_dict_weights)
         except:
             del state_dict_weights['b_classifier.v.1.weight']
             del state_dict_weights['b_classifier.v.1.bias']
             milnet.load_state_dict(state_dict_weights, strict=False)
+            print('***********deleting***********')
+            print(state_dict_weights)
+
+    
     criterion = nn.BCEWithLogitsLoss()
     
     optimizer = torch.optim.Adam(milnet.parameters(), lr=args.lr, betas=(0.5, 0.9), weight_decay=args.weight_decay)
@@ -259,24 +297,49 @@ def main():
         
     bags_path = pd.read_csv(bags_csv)
     train_path = bags_path.iloc[0:int(len(bags_path)*(1-args.split)), :]
-    # print(train_path)
     test_path = bags_path.iloc[int(len(bags_path)*(1-args.split)):, :]
     best_score = 0
     save_path = os.path.join('weights', datetime.date.today().strftime("%m%d%Y"))
     os.makedirs(save_path, exist_ok=True)
     run = len(glob.glob(os.path.join(save_path, '*.pth')))
 
+    if args.database:
+        database = redis.Redis(host='localhost', port=6379)
+        print('************************using database************************************')
+    else:
+        database = None
+    trainset =  BagDataset(train_path, args,database)
+    train_loader = DataLoader(trainset,1, shuffle=True, num_workers=16)
+    testset =  BagDataset(test_path, args,database)
+    test_loader = DataLoader(testset,1, shuffle=False, num_workers=16)
 
-    trainset =  BagDataset(train_path, args)
-    train_loader = DataLoader(trainset,1, shuffle=True, num_workers=8 ,pin_memory=True)
-    testset =  BagDataset(test_path, args)
-    test_loader = DataLoader(testset,1, shuffle=True, num_workers=8 ,pin_memory=True)
+    if args.test:
+        epoch = args.num_epochs
+        train_loss_bag = 0
+        
+        if args.dataset == 'TCGA-lung-default':
+            print('loading released pre-trained aggregator for TCGA')
+            state_dict_weights = torch.load('test/weights/aggregator.pth')
+        else:
+            print('loading released pre-trained aggregator for camelyon')
+            state_dict_weights = torch.load('test-c16/weights/aggregator.pth')
+        milnet.load_state_dict(state_dict_weights, strict=False)
+        test_loss_bag, avg_score, aucs, thresholds_optimal = test(test_loader, milnet, criterion, optimizer, args)
+        if args.dataset=='TCGA-lung':
+            print('\r Epoch [%d/%d] train loss: %.4f test loss: %.4f, average score: %.4f, auc_LUAD: %.4f, auc_LUSC: %.4f' % 
+                  (epoch, args.num_epochs, train_loss_bag, test_loss_bag, avg_score, aucs[0], aucs[1]))
+        else:
+            print('\r Epoch [%d/%d] train loss: %.4f test loss: %.4f, average score: %.4f, AUC: ' % 
+                  (epoch, args.num_epochs, train_loss_bag, test_loss_bag, avg_score) + '|'.join('class-{}>>{}'.format(*k) for k in enumerate(aucs))) 
+        sys.exit()
 
     for epoch in range(1, args.num_epochs):
-        train_path = shuffle(train_path).reset_index(drop=True)
-        test_path = shuffle(test_path).reset_index(drop=True)
+        start_time = time.time()
+        # train_path = shuffle(train_path).reset_index(drop=True)
+        # test_path = shuffle(test_path).reset_index(drop=True)
         # train_loss_bag = train(train_path, milnet, criterion, optimizer, args) # iterate all bags
         train_loss_bag = train(train_loader, milnet, criterion, optimizer, args) # iterate all bags
+        print('epoch time:{}'.format(time.time()- start_time))
         # test_loss_bag, avg_score, aucs, thresholds_optimal = test(test_path, milnet, criterion, optimizer, args)
         test_loss_bag, avg_score, aucs, thresholds_optimal = test(test_loader, milnet, criterion, optimizer, args)
         if args.dataset=='TCGA-lung':
